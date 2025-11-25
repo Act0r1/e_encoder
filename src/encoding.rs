@@ -3,15 +3,15 @@ use alloy::sol;
 use alloy::sol_types::SolCall;
 use anyhow::Result;
 
+/// Encodes function call with selector, stripping dynamic data offset prefix if present.
+/// Use for simple calls like `approve(address,uint256)`.
 pub fn encode_input(selector: &str, mut encoded_args: Vec<u8>) -> Vec<u8> {
     let mut hasher = Keccak256::new();
     hasher.update(selector.as_bytes());
     let selector_bytes = &hasher.finalize()[..4];
     let mut call_data = selector_bytes.to_vec();
 
-    // Remove extra prefix if present (32 bytes for dynamic data)
-    // Alloy encoding is including a prefix for dynamic data indicating the offset or length
-    // but at this point we don't want that
+    // Remove extra prefix if present (32 bytes for dynamic data offset)
     if encoded_args.len() > 32
         && encoded_args[..32]
             == [0u8; 31]
