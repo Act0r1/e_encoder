@@ -4,12 +4,15 @@ mod encoding;
 mod error;
 mod stream_handler;
 
+
+use alloy::providers::{Provider, ProviderBuilder};
 use anyhow::{Result, bail};
 use futures::StreamExt;
 use num_bigint::BigUint;
 use tracing::{error, info, trace};
 use tracing_subscriber::EnvFilter;
 
+use tycho_execution::encoding::evm::encoder_builders::TychoRouterEncoderBuilder;
 use tycho_simulation::evm::protocol::filters::uniswap_v4_euler_hook_pool_filter;
 use tycho_simulation::evm::protocol::uniswap_v4::state::UniswapV4State;
 use tycho_simulation::evm::stream::ProtocolStreamBuilder;
@@ -65,12 +68,12 @@ async fn main() -> Result<()> {
 
     let tvl_filter = ComponentFilter::with_tvl_range(100.0, 100.0);
 
+
     info!("🔧 Building protocol stream with exchanges");
     let protocol_stream =
         ProtocolStreamBuilder::new("tycho-beta.propellerheads.xyz", Chain::Ethereum)
-            // .exchange::<UniswapV4State>("uniswap_v4", tvl_filter.clone(), None)
-                    .exchange::<UniswapV4State>("uniswap_v4_hooks", tvl_filter.clone(),
-            Some(uniswap_v4_euler_hook_pool_filter))
+            .exchange::<UniswapV4State>("uniswap_v4", tvl_filter.clone(), None)
+            // .exchange::<UniswapV4State>("uniswap_v4_hooks", tvl_filter.clone(), Some(uniswap_v4_euler_hook_pool_filter))
 
             .auth_key(Some(config.tycho_api_key.clone()))
             .disable_compression()
@@ -86,6 +89,14 @@ async fn main() -> Result<()> {
             bail!("Failed to build ProtocolStreamBuilder: {:?}", e);
         }
     };
+    let encoder = TychoRouterEncoderBuilder::new()
+        .user_transfer_type(tycho_execution::encoding::models::UserTransferType::TransferFrom)
+        .chain(Chain::Ethereum)
+        .build()?;
+
+
+    let provider = ProviderBuilder::new().connect_http(config.rpc_url);
+
 
     info!("✅ Protocol stream built successfully, starting message loop");
 
@@ -102,8 +113,6 @@ async fn main() -> Result<()> {
                         let sell_token = &addrs[0];
                         let buy_token = &addrs[1];
 
-                        // let amount_in =
-                        //     BigUint::from((1f64 * 10f64.powi(sell_token.decimals as i32)) as u128);
                         let amount_in = BigUint::from(1000u128); // TODO: костыль, нужно что сумма определялась по другому
 
                         info!(
@@ -125,12 +134,18 @@ async fn main() -> Result<()> {
                                 buy_token,
                                 amount_in,
                                 amount_out,
-                                &config.rpc_url,
                                 &config.private_key,
+                                encoder.as_ref(),
                             ) {
-                                Ok(_) => {
-                                    info!("✅ Successfully processed swap");
-                                    break;
+                                Ok(tx_request) => {
+                                    match provider.estimate_gas(tx_request).await {
+                                        Ok(gas) => {
+                                            info!("Estimated gas: {}", gas);
+                                        }
+                                        Err(e) => {
+                                            error!("❌ Failed to estimate gas: {}", e);
+                                        }
+                                    }
                                 }
                                 Err(e) => {
                                     error!("❌ Failed to process swap: {}", e);
